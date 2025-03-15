@@ -7,7 +7,7 @@ from FuzbAIAgent_Example import *
 import random
 
 class FuzbAISim:
-    def __init__(self):
+    def __init__(self, debug=False):
         print(" ______         _             _____ ")
         print("|  ____|       | |      /\   |_   _|")
         print("| |__ _   _ ___| |__   /  \    | |  ")
@@ -47,8 +47,8 @@ class FuzbAISim:
         self.travels = [190, 356, 180, 116, 116, 180, 356, 190]
         self.redIndices = [0, 1, 3, 5]
 
-        self.p1 = PlayerAgent()
-        self.p2 = PlayerAgent()
+        self.p1 = PlayerAgentRL(team="red")  # Red team
+        self.p2 = PlayerAgentRL(team="blue")  # Blue team
 
         # Camera delay settings
         self.simulatedDelay = 0.040
@@ -60,6 +60,7 @@ class FuzbAISim:
         self.motionDirection = [1]*8
         self.motorDeadband = 0.005
 
+        self.debug=debug
         self.loadSimulator(False)
 
         self.isRunning = False
@@ -74,6 +75,10 @@ class FuzbAISim:
         self.motorCommandsExternal2 = []
 
     def getCameraDict(self, player = 1):
+        if self.ballPos is None or self.ballVel is None:
+            print("[ERROR] Ball position or velocity is None!")
+            return {"camData": [{"ball_x": 0, "ball_y": 0, "ball_vx": 0, "ball_vy": 0}], "score": self.score}
+
         ball_x, ball_y = 1000*self.ballPos[0] - 115, 730 - 1000*self.ballPos[1]
         ball_vx, ball_vy = self.ballVel[0][0] + (random.random() - 0.5) * self.ballVelNoise, -self.ballVel[0][1] + (random.random() - 0.5) * self.ballVelNoise
 
@@ -192,7 +197,8 @@ class FuzbAISim:
 
     def loadSimulator(self, printJointInfo = False):
         print("Loading simulator...")
-        physicsClient = p.connect(p.GUI) #or p.DIRECT for non-graphical version
+        mode = p.GUI if self.debug else p.DIRECT  # Enable GUI only when debugging
+        physicsClient = p.connect(mode)  # Use DIRECT in training, GUI in debug mode
 
         p.configureDebugVisualizer(p.COV_ENABLE_WIREFRAME,0)
         p.configureDebugVisualizer(p.COV_ENABLE_SHADOWS,1)
@@ -360,6 +366,7 @@ class FuzbAISim:
 
                         driveMap = [0, 1, 3, 5]
                         for m in motors1:
+                            # print(f"[DEBUG] Axis id: {m["driveID"]-1}")
                             axisID = driveMap[m["driveID"]-1]
                             jId_rot = self.revJoints[axisID]
                             jId_lin = self.slideJoints[axisID]
@@ -369,8 +376,8 @@ class FuzbAISim:
 
                             refPos = self.applyMotorDeadband(axisID, self.travels[axisID]*(1-m["translationTargetPosition"])/1000)
                             p.setJointMotorControl2(self.mizaId, jId_lin, controlMode=p.POSITION_CONTROL, targetPosition=refPos, force=13.303989530423438, maxVelocity=linVel*m["translationVelocity"], positionGain=0.19343157707177333, velocityGain=3.9227062400839023)
-                    except:
-                        print("Exception in agent 1")
+                    except Exception as e:
+                        print(f"Exception in agent 1: {e}")
 
                     try:                                               
                         if self.status_player2 == 0:             
@@ -391,8 +398,8 @@ class FuzbAISim:
 
                             refPos = self.applyMotorDeadband(axisID, self.travels[axisID]*(m["translationTargetPosition"])/1000)
                             p.setJointMotorControl2(self.mizaId, jId_lin, controlMode=p.POSITION_CONTROL, targetPosition=refPos, force=13.303989530423438, maxVelocity=linVel*m["translationVelocity"], positionGain=0.19343157707177333, velocityGain=3.9227062400839023)
-                    except:
-                        print("Exception in agent 2")
+                    except Exception as e:
+                        print(f"Exception in agent 2: {e}")
 
                     prev_t = self.t        
 
@@ -441,6 +448,18 @@ class FuzbAISim:
         print(f'Main loop stopped')
 
         self.isRunning = False
+
+    def reset(self):
+        """
+        Resets the simulator to its initial state.
+        """
+        print("[DEBUG] Resetting FuzbAISim...")
+        
+        # Reset PyBullet simulation
+        p.resetSimulation()
+
+        # Reload the environment setup
+        self.loadSimulator()
 
 if __name__ == "__main__":
     sim = FuzbAISim()

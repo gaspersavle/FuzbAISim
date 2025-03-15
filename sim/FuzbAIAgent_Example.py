@@ -3,6 +3,7 @@ import json
 import time
 import math
 import random
+import numpy as np
 
 HOST_ADDRESS = '127.0.0.1:23336'
 
@@ -145,6 +146,58 @@ class PlayerAgent():
                         commands.append(cmd)
         
         return commands
+
+class PlayerAgentRL:
+    def __init__(self, team="red"):
+        self.team = team  # "red" or "blue"
+
+        # Use the correct rod mapping from the simulator
+        if self.team == "red":
+            self.rods = [0, 1, 2, 3]  # Red team's rods
+            # playerMapping = [1, 2, -1, 3, -1, 4, -1, -1]        
+        else:
+            # self.rods = [4, 5, 6, 7]  # Blue team's rods
+            self.rods = [0, 1, 2, 3]  # Red team's rods
+
+        print(f"[DEBUG] Initialized PlayerAgentRL for {self.team} with rods: {self.rods}")
+        # Define possible actions per rod (translate, rotate)
+        self.actions = [
+            (-1, 0), (1, 0),  # Move rod up/down
+            (0, -1), (0, 1),  # Rotate left/right
+            (0, 0)  # Stay still
+        ]
+
+    def process_data(self, camera):
+        """
+        Moves rods dynamically based on real-time ball position and velocity.
+        """
+        CD0 = camera["camData"][0]  
+        bx, by, vx, vy = CD0["ball_x"], CD0["ball_y"], CD0["ball_vx"], CD0["ball_vy"]
+
+        commands = []
+        for i, rod in enumerate(self.rods):
+            # Move rods toward the ball smoothly
+            trans_dir = np.clip((by - 350) / 350, -1, 1)  # Normalize to range [-1, 1]
+            
+            # Rotate based on ball velocity
+            if abs(vx) > 0.1:  # If ball is moving fast
+                rot_dir = np.sign(vx)  # Rotate in the direction of ball movement
+            else:
+                rot_dir = 0  # No rotation if ball is not moving much
+
+            cmd = {
+                "driveID": rod + 1,  
+                "rotationTargetPosition": np.clip(rot_dir * 0.75, -1, 1),  
+                "rotationVelocity": 1.5,  # More aggressive rotation
+                "translationTargetPosition": np.clip(0.5 + trans_dir * 0.5, 0, 1),  
+                "translationVelocity": 1.5  # Faster reaction speed
+            }
+            commands.append(cmd)
+
+        return commands
+
+
+
 
 if __name__ == "__main__":
     # Instantiate the agent
