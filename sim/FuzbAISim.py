@@ -195,6 +195,22 @@ class FuzbAISim:
         self.prevRefPositions[i] = newPos
         return newPos
 
+    def check_ball_contact(self):
+        """
+        Checks if the ball is in contact with any player rod.
+        Returns True if contact is detected, otherwise False.
+        """
+        CD0 = self.getCameraDict(1)["camData"][0]
+        bx, by = CD0["ball_x"], CD0["ball_y"]
+
+        # Check if the ball is close to any rod position
+        for rod in range(8):  # Assuming 8 rods in total
+            rod_y = 100 * rod  # Estimate rod position (adjust if needed)
+            if abs(by - rod_y) < 30:  # If ball is within 30 pixels of rod
+                return True
+
+        return False
+
     def loadSimulator(self, printJointInfo = False):
         print("Loading simulator...")
         mode = p.GUI if self.debug else p.DIRECT  # Enable GUI only when debugging
@@ -357,47 +373,65 @@ class FuzbAISim:
                 # Process the agents...
                 if self.t - prev_t > 0.02:  
                     try:     
-                        if self.status_player1 == 0:             
-                            motors1 = self.p1.process_data(self.getDelayedCamera(1, self.t - self.simulatedDelay))
+                        # process the rl-controlled agent
+                        if self.status_player1 == 1:  # if using external control
+                            motors1 = self.motorcommandsexternal1  
                         else:
-                            # Use the external motor data...
-                            motors1 = self.motorCommandsExternal1
-                            self.motorCommandsExternal1 = []        
+                            motors1 = self.p1.process_data(self.getDelayedCamera(1, self.t - self.simulatedDelay), np.random.uniform(-1, 1, (4,3)))
+                            # print(f"Motors 1: {motors1}")
 
-                        driveMap = [0, 1, 3, 5]
+                        drivemap = [0, 1, 3, 5]
                         for m in motors1:
-                            # print(f"[DEBUG] Axis id: {m["driveID"]-1}")
-                            axisID = driveMap[m["driveID"]-1]
+                            axisID = drivemap[m["driveID"]-1]
                             jId_rot = self.revJoints[axisID]
                             jId_lin = self.slideJoints[axisID]
 
-                            refAngle = m["rotationTargetPosition"]*2*math.pi                
-                            p.setJointMotorControl2(self.mizaId, jId_rot, controlMode=p.POSITION_CONTROL, targetPosition=refAngle, force=2.0943448919793832, maxVelocity=rotVel*m["rotationVelocity"], positionGain=2.817867199313025, velocityGain=7.574019729635704)
-
-                            refPos = self.applyMotorDeadband(axisID, self.travels[axisID]*(1-m["translationTargetPosition"])/1000)
-                            p.setJointMotorControl2(self.mizaId, jId_lin, controlMode=p.POSITION_CONTROL, targetPosition=refPos, force=13.303989530423438, maxVelocity=linVel*m["translationVelocity"], positionGain=0.19343157707177333, velocityGain=3.9227062400839023)
-                    except Exception as e:
-                        print(f"Exception in agent 1: {e}")
-
-                    try:                                               
-                        if self.status_player2 == 0:             
-                            motors2 = self.p2.process_data(self.getDelayedCamera(2, self.t - self.simulatedDelay))
-                        else:
-                            # Use the external motor data...
-                            motors2 = self.motorCommandsExternal2
-                            self.motorCommandsExternal2 = []        
-
-                        driveMap = [7, 6, 4, 2]                        
-                        for m in motors2:
-                            axisID = driveMap[m["driveID"]-1]
-                            jId_rot = self.revJoints[axisID]
-                            jId_lin = self.slideJoints[axisID]
-
-                            refAngle = -m["rotationTargetPosition"]*2*math.pi                
+                            refAngle = m["rotationTargetPosition"] * 2 * math.pi                
                             p.setJointMotorControl2(self.mizaId, jId_rot, controlMode=p.POSITION_CONTROL, targetPosition=refAngle, force=2.0943448919793832, maxVelocity=rotVel*m["rotationVelocity"], positionGain=2.817867199313025, velocityGain=7.574019729635704)
 
                             refPos = self.applyMotorDeadband(axisID, self.travels[axisID]*(m["translationTargetPosition"])/1000)
                             p.setJointMotorControl2(self.mizaId, jId_lin, controlMode=p.POSITION_CONTROL, targetPosition=refPos, force=13.303989530423438, maxVelocity=linVel*m["translationVelocity"], positionGain=0.19343157707177333, velocityGain=3.9227062400839023)
+                    except Exception as e:
+                        print(f"exception in agent 1: {e}")
+
+                    try:                                               
+                        # Process the RL-controlled agent
+                        if self.status_player2 == 1:  # If using external control
+                            motors2 = self.motorCommandsExternal2
+                        else:
+                            motors2 = self.p2.process_data(self.getDelayedCamera(2, self.t - self.simulatedDelay), np.random.uniform(-1, 1, (4,3)))
+
+                        driveMap = [7, 6, 4, 2]                        
+                        for m in motors2:
+                            # print(f"Axis ID: {drivemap[m["driveID"]-1]}")
+                            axisID = driveMap[m["driveID"]-1]
+                            jId_rot = self.revJoints[axisID]
+                            jId_lin = self.slideJoints[axisID]
+
+                            refAngle = m["rotationTargetPosition"] * 2 * math.pi                
+                            p.setJointMotorControl2(self.mizaId, jId_rot, controlMode=p.POSITION_CONTROL, targetPosition=refAngle, force=2.0943448919793832, maxVelocity=rotVel*m["rotationVelocity"], positionGain=2.817867199313025, velocityGain=7.574019729635704)
+
+                            refPos = self.applyMotorDeadband(axisID, self.travels[axisID]*(m["translationTargetPosition"])/1000)
+                            p.setJointMotorControl2(self.mizaId, jId_lin, controlMode=p.POSITION_CONTROL, targetPosition=refPos, force=13.303989530423438, maxVelocity=linVel*m["translationVelocity"], positionGain=0.19343157707177333, velocityGain=3.9227062400839023)
+
+                        # if self.status_player2 == 0:             
+                        #     motors2 = self.p2.process_data(self.getDelayedCamera(2, self.t - self.simulatedDelay))
+                        # else:
+                        #     # Use the external motor data...
+                        #     motors2 = self.motorCommandsExternal2
+                        #     self.motorCommandsExternal2 = []        
+
+                        # driveMap = [7, 6, 4, 2]                        
+                        # for m in motors2:
+                        #     axisID = driveMap[m["driveID"]-1]
+                        #     jId_rot = self.revJoints[axisID]
+                        #     jId_lin = self.slideJoints[axisID]
+
+                        #     refAngle = -m["rotationTargetPosition"]*2*math.pi                
+                        #     p.setJointMotorControl2(self.mizaId, jId_rot, controlMode=p.POSITION_CONTROL, targetPosition=refAngle, force=2.0943448919793832, maxVelocity=rotVel*m["rotationVelocity"], positionGain=2.817867199313025, velocityGain=7.574019729635704)
+
+                        #     refPos = self.applyMotorDeadband(axisID, self.travels[axisID]*(m["translationTargetPosition"])/1000)
+                        #     p.setJointMotorControl2(self.mizaId, jId_lin, controlMode=p.POSITION_CONTROL, targetPosition=refPos, force=13.303989530423438, maxVelocity=linVel*m["translationVelocity"], positionGain=0.19343157707177333, velocityGain=3.9227062400839023)
                     except Exception as e:
                         print(f"Exception in agent 2: {e}")
 

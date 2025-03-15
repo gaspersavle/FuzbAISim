@@ -151,49 +151,73 @@ class PlayerAgentRL:
     def __init__(self, team="red"):
         self.team = team  # "red" or "blue"
 
+        self.exploration_rate = 1.0  # Start with 100% exploration
+        self.exploration_decay = 0.995  # Reduce exploration over time
+        self.min_exploration = 0.1  # Keep some randomness
+
+        self.prev_positions = {}  # Store previous rod positions
+        self.prev_angles = {}  
+
         # Use the correct rod mapping from the simulator
         if self.team == "red":
-            self.rods = [0, 1, 2, 3]  # Red team's rods
-            # playerMapping = [1, 2, -1, 3, -1, 4, -1, -1]        
+            self.rods = [0, 1, 2, 3]  
         else:
-            # self.rods = [4, 5, 6, 7]  # Blue team's rods
-            self.rods = [0, 1, 2, 3]  # Red team's rods
+            # self.rods = [4, 5, 6, 7]  
+            self.rods = [0, 1, 2, 3]  
 
         print(f"[DEBUG] Initialized PlayerAgentRL for {self.team} with rods: {self.rods}")
-        # Define possible actions per rod (translate, rotate)
-        self.actions = [
-            (-1, 0), (1, 0),  # Move rod up/down
-            (0, -1), (0, 1),  # Rotate left/right
-            (0, 0)  # Stay still
-        ]
 
-    def process_data(self, camera):
+
+    def process_data(self, camera, rl_action):
         """
-        Moves rods dynamically based on real-time ball position and velocity.
+        Updates player actions based on RL output and ball position.
         """
         CD0 = camera["camData"][0]  
         bx, by, vx, vy = CD0["ball_x"], CD0["ball_y"], CD0["ball_vx"], CD0["ball_vy"]
 
+        # print(f"[DEBUG] {self.team} Agent - Ball Position: bx={bx}, by={by}, vx={vx}, vy={vy}")
+        # print(f"[DEBUG] {self.team} Agent - Received RL Action: {rl_action} (Shape: {rl_action.shape})")
+        # print(f"[DEBUG] {self.team} Agent - Rod Mapping: {self.rods}")
+
+        # Check if self.rods exists
+        if not hasattr(self, "rods") or not self.rods:
+            print(f"[ERROR] {self.team} Agent - self.rods is not initialized or empty!")
+            self.rods = [0, 1, 2, 3]  # Default values for debugging
+
+        if rl_action is None or not isinstance(rl_action, np.ndarray):
+            print(f"[ERROR] Invalid RL action received! Expected {len(self.rods)} actions, got None.")
+            rl_action = np.zeros((len(self.rods), 3))  
+
+        if rl_action.shape != (len(self.rods), 3):
+            print(f"[ERROR] Action shape mismatch! Expected {(len(self.rods), 3)}, got {rl_action.shape}")
+            rl_action = np.zeros((len(self.rods), 3))  
+
         commands = []
         for i, rod in enumerate(self.rods):
-            # Move rods toward the ball smoothly
-            trans_dir = np.clip((by - 350) / 350, -1, 1)  # Normalize to range [-1, 1]
-            
-            # Rotate based on ball velocity
-            if abs(vx) > 0.1:  # If ball is moving fast
-                rot_dir = np.sign(vx)  # Rotate in the direction of ball movement
-            else:
-                rot_dir = 0  # No rotation if ball is not moving much
+            try:
+                # print(f"[DEBUG] Processing action for {self.team}, rod index: {i}, rod ID: {rod}")
 
-            cmd = {
-                "driveID": rod + 1,  
-                "rotationTargetPosition": np.clip(rot_dir * 0.75, -1, 1),  
-                "rotationVelocity": 1.5,  # More aggressive rotation
-                "translationTargetPosition": np.clip(0.5 + trans_dir * 0.5, 0, 1),  
-                "translationVelocity": 1.5  # Faster reaction speed
-            }
-            commands.append(cmd)
+                trans_dir, rot_dir, velocity = rl_action[i]
 
+                smoothed_trans = 0.9 * self.prev_positions.get(rod, 0.5) + 0.1 * (0.5 + trans_dir * 0.5)
+                smoothed_rot = 0.9 * self.prev_angles.get(rod, 0.0) + 0.1 * (rot_dir * 0.75)
+
+                self.prev_positions[rod] = smoothed_trans
+                self.prev_angles[rod] = smoothed_rot
+
+                cmd = {
+                    "driveID": rod + 1,  
+                    "rotationTargetPosition": np.clip(smoothed_rot, -1, 1),  
+                    "rotationVelocity": np.clip(velocity * 1.5, 0.1, 2.0),  
+                    "translationTargetPosition": np.clip(smoothed_trans, 0, 1),  
+                    "translationVelocity": np.clip(velocity * 1.5, 0.1, 2.0)  
+                }
+                commands.append(cmd)
+
+            except Exception as e:
+                print(f"[ERROR] Exception in agent {self.team}, rod {rod}: {e}")
+
+        # print(f"[DEBUG] Processed RL Actions for {self.team}: {commands}")
         return commands
 
 

@@ -1,49 +1,55 @@
+import torch
+import numpy as np
 from stable_baselines3 import SAC
 from stable_baselines3.common.vec_env import DummyVecEnv
-from stable_baselines3.common.logger import configure
 from stable_baselines3.common.callbacks import BaseCallback
-import numpy as np
 from GymEnv import FoosballEnv
 
-class RewardLogger(BaseCallback):
-    def __init__(self, check_freq=100, verbose=1):
-        super(RewardLogger, self).__init__(verbose)
-        self.check_freq = check_freq
-        self.rewards = []
+# Check if GPU is available
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"[DEBUG] Using device: {device}")
 
-    def _on_step(self):
-        """
-        Logs training progress and checks if the callback is being called.
-        """
-        print(f"[DEBUG] Step: {self.n_calls} - Callback is running!")  # Debug print
-
-        # Get rewards from the environment
-        rewards = self.training_env.get_attr("episode_reward", 0)
-        print(f"[DEBUG] Rewards: {rewards}")  # See if rewards are being collected
-
-        self.rewards.append(np.mean(rewards))
-
-        if self.n_calls % self.check_freq == 0:
-            mean_reward = np.mean(self.rewards[-10:])  # Average last 10 episodes
-            print(f"Step: {self.n_calls}, Avg Reward: {mean_reward:.2f}")
-
-        return True  # Continue training
-
-
+# Wrap environment
 env = DummyVecEnv([lambda: FoosballEnv(debug=True)])
 
-# Force TensorBoard logging
-new_logger = configure("./logs/", ["stdout", "tensorboard"])
+print(f"[DEBUG] Action space shape: {env.action_space.shape}")
+print(f"[DEBUG] Observation space shape: {env.observation_space.shape}")
 
-# Initialize SAC model
-model = SAC("MlpPolicy", env, verbose=1)
-model.set_logger(new_logger)  # Force logs
+# Custom callback to monitor training
+class TrainingMonitor(BaseCallback):
+    def __init__(self, check_freq=100, verbose=1):
+        super(TrainingMonitor, self).__init__(verbose)
+        self.check_freq = check_freq
+        self.episode_rewards = []
 
-# Attach debugging callback
-callback = RewardLogger(check_freq=100)
+    def _on_step(self) -> bool:
+        if "rewards" in self.locals:
+            self.episode_rewards.append(self.locals["rewards"])
 
-# Start training
-model.learn(total_timesteps=5000, callback=callback, log_interval=10)  # Force logs every 10 steps
+        if self.n_calls % self.check_freq == 0:
+            mean_reward = np.mean(self.episode_rewards[-10:])
+            print(f"[TRAINING] Step {self.n_calls} | Avg Reward (Last 10): {mean_reward:.2f}")
 
-# Save model
-model.save("foosball_agent_continuous")
+        return True
+
+# ✅ Use **one** SAC model that learns for **both** players (instead of separate models)
+model = SAC("MlpPolicy", env, verbose=1, device=device)
+
+# Attach callback for monitoring
+callback = TrainingMonitor(check_freq=100)
+
+# Train model
+print("[TRAINING] Starting training...")
+model.learn(total_timesteps=200000, callback=callback)
+
+# Save trained model
+model.save("foosball_agent")
+
+# ✅ Test the trained model for 100 steps
+obs = env.reset()
+for _ in range(100):
+    action, _ = model.predict(obs)  # Get actions for both players
+
+    print(f"[DEBUG] RL Model Generated Actions: {action} (Shape: {action.shape})")
+
+    obs, rewards, dones, info = env.step(action)  # Pass combined actions into environment

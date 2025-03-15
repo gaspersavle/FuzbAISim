@@ -10,15 +10,9 @@ class FoosballEnv(gym.Env):
         self.sim = FuzbAISim(debug=debug)
         self.episode_reward = 0  # Track episode rewards
 
-        # State space: Ball (x, y, vx, vy) + Rods (positions & angles)
-        self.observation_space = spaces.Box(
-            low=np.array([0, 0, -1, -1] + [0]*8 + [-32]*8),
-            high=np.array([1210, 700, 1, 1] + [1]*8 + [32]*8),
-            dtype=np.float32
-        )
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(8, 3), dtype=np.float32)
 
-        # Continuous action space: (translation, rotation, velocity)
-        self.action_space = spaces.Box(low=-1, high=1, shape=(4, 3), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(20,), dtype=np.float32)
 
         # Store previous rod positions & angles to prevent shaking
         self.prev_rod_positions = np.zeros(4)
@@ -56,95 +50,82 @@ class FoosballEnv(gym.Env):
 
 
 
-    def _compute_reward(self):
+    def _compute_reward(self, team):
         """
         Computes the reward for the agent based on gameplay and movement smoothness.
         """
         camData = self.sim.getCameraDict(1)
         bx, by, vx, vy = camData["camData"][0]["ball_x"], camData["camData"][0]["ball_y"], camData["camData"][0]["ball_vx"], camData["camData"][0]["ball_vy"]
 
-        reward = 0.1 # Default reward
+        reward = 0  
 
-        # 1️⃣ **Reward for hitting the ball**
-        if abs(vx) > 0.2 or abs(vy) > 0.2:
-            reward += 0.1  
+        # Reward for movement (encourages active play)
+        avg_velocity = np.mean([abs(vx), abs(vy)])
+        reward += avg_velocity * 0.2  
 
-        # 2️⃣ **Penalty for excessive shaking**
-        current_positions = np.array(camData["camData"][0]["rod_position_calib"][:4])  # First 4 rods
-        current_angles = np.array(camData["camData"][0]["rod_angle"][:4])  # First 4 rod angles
+        # Reward for positioning rods near the ball
+        for rod in self.sim.p1.rods if team == "red" else self.sim.p2.rods:
+            rod_y = 100 * rod
+            reward += 0.1 - abs(by - rod_y) / 350  
 
-        movement_penalty = np.sum(np.abs(current_positions - self.prev_rod_positions))  # How much rods moved
-        rotation_penalty = np.sum(np.abs(current_angles - self.prev_rod_angles))  # How much rods rotated
+        # Reward for moving the ball toward the opponent’s goal
+        if team == "red" and vx > 0:  
+            reward += 0.5  
+        elif team == "blue" and vx < 0:
+            reward += 0.5  
 
-        # If shaking is detected, apply penalty
-        if movement_penalty > 0.2:  # Threshold to ignore small movements
-            reward -= movement_penalty * 0.5  # Reduce shaking
-        if rotation_penalty > 5:  # Too much rod rotation
-            reward -= rotation_penalty * 0.1  # Penalize excessive rotation
+        # Reward for making contact with the ball
+        if self.sim.check_ball_contact():
+            reward += 1.0  
 
-        # Save previous values for next step comparison
-        self.prev_rod_positions = current_positions
-        self.prev_rod_angles = current_angles
+        # Small penalty for stopping too much
+        if avg_velocity < 0.05:
+            reward -= 0.1  
 
-        # 3️⃣ **Penalty for shooting towards own goal**
-        if vx < -0.2:  # Ball moving left (bad for red team)
-            reward -= 0.5
-        elif vx > 0.2:  # Ball moving right (bad for blue team)
-            reward -= 0.5
-
-        # 4️⃣ **Big Penalty if opponent scores a goal**
-        if self.sim.score[1] > 0:  # Blue scored against Red
-            reward -= 5.0
-            self.sim.score = [0, 0]  # Reset the score
-        elif self.sim.score[0] > 0:  # Red scored against Blue
-            reward -= 5.0
-            self.sim.score = [0, 0]  # Reset the score
-
-        # 5️⃣ **Reward for scoring a goal**
-        if self.sim.score[0] > 0:  # Red scores
-            reward += 10.0
-            self.sim.score = [0, 0]  
-        elif self.sim.score[1] > 0:  # Blue scores
-            reward += 10.0
-            self.sim.score = [0, 0]  
-
-        return reward
+        return float(reward)
 
     def step(self, action):
         """
-        Apply continuous actions for smooth movement and shooting.
+        Executes learned continuous actions for both players.
         """
-        commands = []
-        for i, rod in enumerate(self.sim.p1.rods):
-            trans_dir, rot_dir, velocity = action[i]
+        # print(f"[DEBUG] Received RL action: {action} (Shape: {action.shape})")
 
-            # Smooth movement by limiting sudden jumps
-            trans_smooth = np.clip(self.prev_rod_positions[i] + trans_dir * 0.1, 0, 1)
-            rot_smooth = np.clip(self.prev_rod_angles[i] + rot_dir * 0.1, -1, 1)
+        if action is None or not isinstance(action, np.ndarray):
+            print("[ERROR] RL action is None or not a NumPy array!")
+            action = np.zeros((8, 3))  
 
-            cmd = {
-                # "driveID": i + 1,  
-                "driveID": rod + 1,  
-                "rotationTargetPosition": rot_smooth * 0.75,  
-                "rotationVelocity": np.clip(velocity * 1.5, 0.1, 2.0),  
-                "translationTargetPosition": trans_smooth,  
-                "translationVelocity": np.clip(velocity * 1.5, 0.1, 2.0)  
-            }
-            commands.append(cmd)
+        if action.shape != (8, 3):  # Expecting 8 actions (4 for each player)
+            print(f"[ERROR] Action shape mismatch! Expected (8,3), got {action.shape}")
+            action = np.zeros((8, 3))  
 
-        # Store previous values for smooth movement
-        self.prev_rod_positions = [cmd["translationTargetPosition"] for cmd in commands]
-        self.prev_rod_angles = [cmd["rotationTargetPosition"] for cmd in commands]
+        camera_data = self.sim.getCameraDict(1)
 
-        self.sim.motorCommandsExternal1 = commands  
-        self.sim.motorCommandsExternal2 = commands  
+        actions_p1 = action[:4]
+        actions_p2 = action[4:]
+
+        commands_p1 = self.sim.p1.process_data(camera_data, actions_p1)
+        commands_p2 = self.sim.p2.process_data(camera_data, actions_p2)
+
+        # ✅ Assign the RL-generated motor commands
+        self.sim.motorCommandsExternal1 = commands_p1  
+        self.sim.motorCommandsExternal2 = commands_p2  
+
+        # print(f"[DEBUG] RL Actions Applied to motorCommandsExternal1: {self.sim.motorCommandsExternal1}")
+        # print(f"[DEBUG] RL Actions Applied to motorCommandsExternal2: {self.sim.motorCommandsExternal2}")
 
         time.sleep(0.02)
 
-        obs = self._get_obs()
-        reward = self._compute_reward()
-        self.episode_reward += reward  # Track total rewards in the episode
-        return obs, reward, False, {}
+        # ✅ Compute separate rewards for both players
+        reward_p1 = self._compute_reward("red")
+        reward_p2 = self._compute_reward("blue")
+
+        # ✅ Return rewards as a NumPy array instead of a list
+        # reward = np.array([reward_p1, reward_p2], dtype=np.float32).flatten()  # Fix for ValueError
+        total_reward = float(reward_p1 + reward_p2) 
+
+        done = False  
+
+        return self._get_obs(), total_reward, done, {}
 
 
     def reset(self):
